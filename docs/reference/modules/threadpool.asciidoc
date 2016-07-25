@@ -148,3 +148,8 @@ explicitly set using the `processors` setting.
 
 In order to check the number of processors detected, use the nodes info
 API with the `os` flag.
+
+[source,js]
+--------------------------------------------------
+processors: 2
+--------------------------------------------------

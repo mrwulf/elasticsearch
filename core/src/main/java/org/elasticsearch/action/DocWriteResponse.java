@@ -18,9 +18,10 @@
  */
 package org.elasticsearch.action;
 
+import org.elasticsearch.Version;
 import org.elasticsearch.action.support.WriteRequest;
-import org.elasticsearch.action.support.WriteResponse;
 import org.elasticsearch.action.support.WriteRequest.RefreshPolicy;
+import org.elasticsearch.action.support.WriteResponse;
 import org.elasticsearch.action.support.replication.ReplicationResponse;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.io.stream.StreamInput;
@@ -29,10 +30,13 @@ import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.xcontent.StatusToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.seqno.SequenceNumbersService;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Locale;
 
 /**
@@ -40,16 +44,21 @@ import java.util.Locale;
  */
 public abstract class DocWriteResponse extends ReplicationResponse implements WriteResponse, StatusToXContent {
 
-    public enum Operation implements Writeable {
-        CREATE(0),
-        INDEX(1),
-        DELETE(2),
-        NOOP(3);
+    /**
+     * An enum that represents the the results of CRUD operations, primarily used to communicate the type of
+     * operation that occurred.
+     */
+    public enum Result implements Writeable {
+        CREATED(0),
+        UPDATED(1),
+        DELETED(2),
+        NOT_FOUND(3),
+        NOOP(4);
 
         private final byte op;
         private final String lowercase;
 
-        Operation(int op) {
+        Result(int op) {
             this.op = (byte) op;
             this.lowercase = this.toString().toLowerCase(Locale.ENGLISH);
         }
@@ -62,19 +71,21 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
             return lowercase;
         }
 
-        public static Operation readFrom(StreamInput in) throws IOException{
+        public static Result readFrom(StreamInput in) throws IOException{
             Byte opcode = in.readByte();
             switch(opcode){
                 case 0:
-                    return CREATE;
+                    return CREATED;
                 case 1:
-                    return INDEX;
+                    return UPDATED;
                 case 2:
-                    return DELETE;
+                    return DELETED;
                 case 3:
+                    return NOT_FOUND;
+                case 4:
                     return NOOP;
                 default:
-                    throw new IllegalArgumentException("Unknown operation code: " + opcode);
+                    throw new IllegalArgumentException("Unknown result code: " + opcode);
             }
         }
 
@@ -88,15 +99,17 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
     private String id;
     private String type;
     private long version;
+    private long seqNo;
     private boolean forcedRefresh;
-    protected Operation operation;
+    protected Result result;
 
-    public DocWriteResponse(ShardId shardId, String type, String id, long version, Operation operation) {
+    public DocWriteResponse(ShardId shardId, String type, String id, long seqNo, long version, Result result) {
         this.shardId = shardId;
         this.type = type;
         this.id = id;
+        this.seqNo = seqNo;
         this.version = version;
-        this.operation = operation;
+        this.result = result;
     }
 
     // needed for deserialization
@@ -106,8 +119,8 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
     /**
      * The change that occurred to the document.
      */
-    public Operation getOperation() {
-        return operation;
+    public Result getResult() {
+        return result;
     }
 
     /**
@@ -116,7 +129,6 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
     public String getIndex() {
         return this.shardId.getIndexName();
     }
-
 
     /**
      * The exact shard the document was changed in.
@@ -147,6 +159,14 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
     }
 
     /**
+     * Returns the sequence number assigned for this change. Returns {@link SequenceNumbersService#UNASSIGNED_SEQ_NO} if the operation
+     * wasn't performed (i.e., an update operation that resulted in a NOOP).
+     */
+    public long getSeqNo() {
+        return seqNo;
+    }
+
+    /**
      * Did this request force a refresh? Requests that set {@link WriteRequest#setRefreshPolicy(RefreshPolicy)} to
      * {@link RefreshPolicy#IMMEDIATE} will always return true for this. Requests that set it to {@link RefreshPolicy#WAIT_UNTIL} will
      * only return true here if they run out of refresh listener slots (see {@link IndexSettings#MAX_REFRESH_LISTENERS_PER_SHARD}).
@@ -168,8 +188,9 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
     /**
      * Gets the location of the written document as a string suitable for a {@code Location} header.
      * @param routing any routing used in the request. If null the location doesn't include routing information.
+     *
      */
-    public String getLocation(@Nullable String routing) {
+    public String getLocation(@Nullable String routing) throws URISyntaxException {
         // Absolute path for the location of the document. This should be allowed as of HTTP/1.1:
         // https://tools.ietf.org/html/rfc7231#section-7.1.2
         String index = getIndex();
@@ -187,7 +208,9 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
         if (routing != null) {
             location.append(routingStart).append(routing);
         }
-        return location.toString();
+
+        URI uri = new URI(location.toString());
+        return uri.toASCIIString();
     }
 
     @Override
@@ -197,8 +220,13 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
         type = in.readString();
         id = in.readString();
         version = in.readZLong();
+        if (in.getVersion().onOrAfter(Version.V_6_0_0_alpha1_UNRELEASED)) {
+            seqNo = in.readZLong();
+        } else {
+            seqNo = SequenceNumbersService.UNASSIGNED_SEQ_NO;
+        }
         forcedRefresh = in.readBoolean();
-        operation = Operation.readFrom(in);
+        result = Result.readFrom(in);
     }
 
     @Override
@@ -208,8 +236,11 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
         out.writeString(type);
         out.writeString(id);
         out.writeZLong(version);
+        if (out.getVersion().onOrAfter(Version.V_6_0_0_alpha1_UNRELEASED)) {
+            out.writeZLong(seqNo);
+        }
         out.writeBoolean(forcedRefresh);
-        operation.writeTo(out);
+        result.writeTo(out);
     }
 
     @Override
@@ -219,9 +250,14 @@ public abstract class DocWriteResponse extends ReplicationResponse implements Wr
             .field("_type", type)
             .field("_id", id)
             .field("_version", version)
-            .field("_operation", getOperation().getLowercase())
-            .field("forced_refresh", forcedRefresh);
+            .field("result", getResult().getLowercase());
+        if (forcedRefresh) {
+            builder.field("forced_refresh", forcedRefresh);
+        }
         shardInfo.toXContent(builder, params);
+        if (getSeqNo() >= 0) {
+            builder.field("_seq_no", getSeqNo());
+        }
         return builder;
     }
 }

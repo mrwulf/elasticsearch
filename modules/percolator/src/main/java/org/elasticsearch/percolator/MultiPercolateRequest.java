@@ -22,13 +22,13 @@ import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.CompositeIndicesRequest;
-import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.XContent;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
@@ -48,7 +48,7 @@ import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeSt
  * @deprecated Instead use multi search API with {@link PercolateQueryBuilder}
  */
 @Deprecated
-public class MultiPercolateRequest extends ActionRequest<MultiPercolateRequest> implements CompositeIndicesRequest {
+public class MultiPercolateRequest extends ActionRequest implements CompositeIndicesRequest {
 
     private String[] indices;
     private String documentType;
@@ -89,7 +89,7 @@ public class MultiPercolateRequest extends ActionRequest<MultiPercolateRequest> 
     /**
      * Embeds a percolate request which request body is defined as raw bytes to this multi percolate request
      */
-    public MultiPercolateRequest add(BytesReference data, boolean allowExplicitIndex) throws Exception {
+    public MultiPercolateRequest add(BytesReference data, boolean allowExplicitIndex) throws IOException {
         XContent xContent = XContentFactory.xContent(data);
         int from = 0;
         int length = data.length();
@@ -118,7 +118,8 @@ public class MultiPercolateRequest extends ActionRequest<MultiPercolateRequest> 
 
             // now parse the action
             if (nextMarker - from > 0) {
-                try (XContentParser parser = xContent.createParser(data.slice(from, nextMarker - from))) {
+                // EMPTY is safe here because we don't call namedObject
+                try (XContentParser parser = xContent.createParser(NamedXContentRegistry.EMPTY, data.slice(from, nextMarker - from))) {
                     // Move to START_OBJECT, if token is null, its an empty data
                     XContentParser.Token token = parser.nextToken();
                     if (token != null) {
@@ -162,11 +163,6 @@ public class MultiPercolateRequest extends ActionRequest<MultiPercolateRequest> 
         }
 
         return this;
-    }
-
-    @Override
-    public List<? extends IndicesRequest> subRequests() {
-        return requests;
     }
 
     private void parsePercolateAction(XContentParser parser, PercolateRequest percolateRequest, boolean allowExplicitIndex) throws IOException {

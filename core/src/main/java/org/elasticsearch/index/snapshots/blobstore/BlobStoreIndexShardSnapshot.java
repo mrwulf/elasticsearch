@@ -27,7 +27,6 @@ import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.common.xcontent.FromXContentBuilder;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
@@ -41,9 +40,7 @@ import java.util.List;
 /**
  * Shard snapshot metadata
  */
-public class BlobStoreIndexShardSnapshot implements ToXContent, FromXContentBuilder<BlobStoreIndexShardSnapshot> {
-
-    public static final BlobStoreIndexShardSnapshot PROTO = new BlobStoreIndexShardSnapshot();
+public class BlobStoreIndexShardSnapshot implements ToXContent {
 
     /**
      * Information about snapshotted file
@@ -70,7 +67,7 @@ public class BlobStoreIndexShardSnapshot implements ToXContent, FromXContentBuil
 
             long partBytes = Long.MAX_VALUE;
             if (partSize != null) {
-                partBytes = partSize.bytes();
+                partBytes = partSize.getBytes();
             }
 
             long totalLength = metaData.length();
@@ -261,7 +258,7 @@ public class BlobStoreIndexShardSnapshot implements ToXContent, FromXContentBuil
                 builder.field(CHECKSUM, file.metadata.checksum());
             }
             if (file.partSize != null) {
-                builder.field(PART_SIZE, file.partSize.bytes());
+                builder.field(PART_SIZE, file.partSize.getBytes());
             }
 
             if (file.metadata.writtenBy() != null) {
@@ -478,6 +475,7 @@ public class BlobStoreIndexShardSnapshot implements ToXContent, FromXContentBuil
     private static final ParseField PARSE_NUMBER_OF_FILES = new ParseField("number_of_files");
     private static final ParseField PARSE_TOTAL_SIZE = new ParseField("total_size");
     private static final ParseField PARSE_FILES = new ParseField("files");
+    private static final ParseFieldMatcher parseFieldMatcher = ParseFieldMatcher.EMPTY;
 
     /**
      * Serializes shard snapshot metadata info into JSON
@@ -507,8 +505,7 @@ public class BlobStoreIndexShardSnapshot implements ToXContent, FromXContentBuil
      * @param parser parser
      * @return shard snapshot metadata
      */
-    public BlobStoreIndexShardSnapshot fromXContent(XContentParser parser, ParseFieldMatcher parseFieldMatcher) throws IOException {
-
+    public static BlobStoreIndexShardSnapshot fromXContent(XContentParser parser) throws IOException {
         String snapshot = null;
         long indexVersion = -1;
         long startTime = 0;

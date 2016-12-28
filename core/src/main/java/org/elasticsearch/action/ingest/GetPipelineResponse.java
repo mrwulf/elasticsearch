@@ -52,7 +52,7 @@ public class GetPipelineResponse extends ActionResponse implements StatusToXCont
         int size = in.readVInt();
         pipelines = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
-            pipelines.add(PipelineConfiguration.readPipelineConfiguration(in));
+            pipelines.add(PipelineConfiguration.readFrom(in));
         }
     }
 
@@ -76,11 +76,9 @@ public class GetPipelineResponse extends ActionResponse implements StatusToXCont
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.startArray("pipelines");
         for (PipelineConfiguration pipeline : pipelines) {
-            pipeline.toXContent(builder, params);
+            builder.field(pipeline.getId(), pipeline.getConfigAsMap());
         }
-        builder.endArray();
         return builder;
     }
 }

@@ -28,9 +28,9 @@ import org.elasticsearch.common.text.Text;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.rest.action.support.RestActions;
+import org.elasticsearch.rest.action.RestActions;
 import org.elasticsearch.search.aggregations.InternalAggregations;
-import org.elasticsearch.search.highlight.HighlightField;
+import org.elasticsearch.search.fetch.subphase.highlight.HighlightField;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -136,16 +136,7 @@ public class PercolateResponse extends BroadcastResponse implements Iterable<Per
                     if (match.getHighlightFields().isEmpty() == false) {
                         builder.startObject(Fields.HIGHLIGHT);
                         for (HighlightField field : match.getHighlightFields().values()) {
-                            builder.field(field.name());
-                            if (field.fragments() == null) {
-                                builder.nullValue();
-                            } else {
-                                builder.startArray();
-                                for (Text fragment : field.fragments()) {
-                                    builder.value(fragment);
-                                }
-                                builder.endArray();
-                            }
+                            field.toXContent(builder, params);
                         }
                         builder.endObject();
                     }

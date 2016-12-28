@@ -19,8 +19,12 @@
 
 package org.elasticsearch.index.reindex.remote;
 
+import org.apache.http.ContentTooLongException;
 import org.apache.http.HttpEntity;
 import org.apache.http.util.EntityUtils;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.logging.log4j.util.Supplier;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchStatusException;
 import org.elasticsearch.Version;
@@ -34,10 +38,10 @@ import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.ParseFieldMatcherSupplier;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
@@ -70,7 +74,7 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
     private final SearchRequest searchRequest;
     Version remoteVersion;
 
-    public RemoteScrollableHitSource(ESLogger logger, BackoffPolicy backoffPolicy, ThreadPool threadPool, Runnable countSearchRetry,
+    public RemoteScrollableHitSource(Logger logger, BackoffPolicy backoffPolicy, ThreadPool threadPool, Runnable countSearchRetry,
             Consumer<Exception> fail, RestClient client, BytesReference query, SearchRequest searchRequest) {
         super(logger, backoffPolicy, threadPool, countSearchRetry, fail);
         this.query = query;
@@ -80,11 +84,17 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
 
     @Override
     public void close() {
-        try {
-            client.close();
-        } catch (IOException e) {
-            fail.accept(new IOException("couldn't close the remote connection", e));
-        }
+        super.close();
+        /* This might be called on the RestClient's thread pool and attempting to close the client on its own threadpool causes it to fail
+         * to close. So we always shutdown the RestClient asynchronously on a thread in Elasticsearch's generic thread pool. That way we
+         * never close the client in its own thread pool. */
+        threadPool.generic().submit(() -> {
+            try {
+                client.close();
+            } catch (IOException e) {
+                logger.error("Failed to shutdown the remote connection", e);
+            }
+        });
     }
 
     @Override
@@ -98,7 +108,6 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
 
     void lookupRemoteVersion(Consumer<Version> onVersion) {
         execute("GET", "", emptyMap(), null, MAIN_ACTION_PARSER, onVersion);
-        
     }
 
     private void onStartResponse(Consumer<? super Response> onResponse, Response response) {
@@ -119,7 +128,7 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
     @Override
     protected void clearScroll(String scrollId) {
         // Need to throw out response....
-        client.performRequest("DELETE", scrollPath(), emptyMap(), scrollEntity(scrollId), new ResponseListener() {
+        client.performRequestAsync("DELETE", scrollPath(), emptyMap(), scrollEntity(scrollId), new ResponseListener() {
             @Override
             public void onSuccess(org.elasticsearch.client.Response response) {
                 logger.debug("Successfully cleared [{}]", scrollId);
@@ -127,7 +136,7 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
 
             @Override
             public void onFailure(Exception t) {
-                logger.warn("Failed to clear scroll [{}]", t, scrollId);
+                logger.warn((Supplier<?>) () -> new ParameterizedMessage("Failed to clear scroll [{}]", scrollId), t);
             }
         });
     }
@@ -141,7 +150,7 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
 
             @Override
             protected void doRun() throws Exception {
-                client.performRequest(method, uri, params, entity, new ResponseListener() {
+                client.performRequestAsync(method, uri, params, entity, new ResponseListener() {
                     @Override
                     public void onSuccess(org.elasticsearch.client.Response response) {
                         // Restore the thread context to get the precious headers
@@ -158,7 +167,19 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
                                 //auto-detect as a fallback
                                 xContentType = XContentFactory.xContentType(content);
                             }
-                            try(XContentParser xContentParser = xContentType.xContent().createParser(content)) {
+                            if (xContentType == null) {
+                                try {
+                                    throw new ElasticsearchException(
+                                            "Can't detect content type for response: " + bodyMessage(response.getEntity()));
+                                } catch (IOException e) {
+                                    ElasticsearchException ee = new ElasticsearchException("Error extracting body from response");
+                                    ee.addSuppressed(e);
+                                    throw ee;
+                                }
+                            }
+                            // EMPTY is safe here because we don't call namedObject
+                            try (XContentParser xContentParser = xContentType.xContent().createParser(NamedXContentRegistry.EMPTY,
+                                    content)) {
                                 parsedResponse = parser.apply(xContentParser, () -> ParseFieldMatcher.STRICT);
                             }
                         } catch (IOException e) {
@@ -174,7 +195,8 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
                             if (RestStatus.TOO_MANY_REQUESTS.getStatus() == re.getResponse().getStatusLine().getStatusCode()) {
                                 if (retries.hasNext()) {
                                     TimeValue delay = retries.next();
-                                    logger.trace("retrying rejected search after [{}]", e, delay);
+                                    logger.trace(
+                                        (Supplier<?>) () -> new ParameterizedMessage("retrying rejected search after [{}]", delay), e);
                                     countSearchRetry.run();
                                     threadPool.schedule(delay, ThreadPool.Names.SAME, RetryHelper.this);
                                     return;
@@ -182,6 +204,9 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
                             }
                             e = wrapExceptionToPreserveStatus(re.getResponse().getStatusLine().getStatusCode(),
                                     re.getResponse().getEntity(), re);
+                        } else if (e instanceof ContentTooLongException) {
+                            e = new IllegalArgumentException(
+                                    "Remote responded with a chunk that was too large. Use a smaller batch size.", e);
                         }
                         fail.accept(e);
                     }
@@ -208,18 +233,20 @@ public class RemoteScrollableHitSource extends ScrollableHitSource {
             messagePrefix = "Couldn't extract status [" + statusCode + "]. ";
             status = RestStatus.INTERNAL_SERVER_ERROR;
         }
-        String message;
-        if (entity == null) {
-            message = messagePrefix + "No error body.";
-        } else {
-            try {
-                message = messagePrefix + "body=" + EntityUtils.toString(entity);
-            } catch (IOException ioe) {
-                ElasticsearchStatusException e = new ElasticsearchStatusException(messagePrefix + "Failed to extract body.", status, cause);
-                e.addSuppressed(ioe);
-                return e;
-            }
+        try {
+            return new ElasticsearchStatusException(messagePrefix + bodyMessage(entity), status, cause);
+        } catch (IOException ioe) {
+            ElasticsearchStatusException e = new ElasticsearchStatusException(messagePrefix + "Failed to extract body.", status, cause);
+            e.addSuppressed(ioe);
+            return e;
         }
-        return new ElasticsearchStatusException(message, status, cause);
+    }
+
+    static String bodyMessage(@Nullable HttpEntity entity) throws IOException {
+        if (entity == null) {
+            return "No error body.";
+        } else {
+            return "body=" + EntityUtils.toString(entity);
+        }
     }
 }

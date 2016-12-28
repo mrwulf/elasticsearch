@@ -22,12 +22,13 @@ package org.elasticsearch.common.blobstore.url;
 import org.elasticsearch.common.blobstore.BlobMetaData;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.support.AbstractBlobContainer;
-import org.elasticsearch.common.bytes.BytesReference;
 
 import java.io.BufferedInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.nio.file.NoSuchFileException;
 import java.util.Map;
 
 /**
@@ -100,7 +101,11 @@ public class URLBlobContainer extends AbstractBlobContainer {
 
     @Override
     public InputStream readBlob(String name) throws IOException {
-        return new BufferedInputStream(new URL(path, name).openStream(), blobStore.bufferSizeInBytes());
+        try {
+            return new BufferedInputStream(new URL(path, name).openStream(), blobStore.bufferSizeInBytes());
+        } catch (FileNotFoundException fnfe) {
+            throw new NoSuchFileException("[" + name + "] blob not found");
+        }
     }
 
     @Override
@@ -108,8 +113,4 @@ public class URLBlobContainer extends AbstractBlobContainer {
         throw new UnsupportedOperationException("URL repository doesn't support this operation");
     }
 
-    @Override
-    public void writeBlob(String blobName, BytesReference data) throws IOException {
-        throw new UnsupportedOperationException("URL repository doesn't support this operation");
-    }
 }

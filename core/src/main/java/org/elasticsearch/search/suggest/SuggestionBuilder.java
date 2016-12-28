@@ -21,7 +21,6 @@ package org.elasticsearch.search.suggest;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.elasticsearch.ElasticsearchParseException;
-import org.elasticsearch.action.support.ToXContentToBytes;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.ParseFieldMatcher;
 import org.elasticsearch.common.ParsingException;
@@ -29,6 +28,7 @@ import org.elasticsearch.common.io.stream.NamedWriteable;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.lucene.BytesRefs;
+import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.mapper.MappedFieldType;
@@ -43,7 +43,7 @@ import java.util.Objects;
 /**
  * Base class for the different suggestion implementations.
  */
-public abstract class SuggestionBuilder<T extends SuggestionBuilder<T>> extends ToXContentToBytes implements NamedWriteable {
+public abstract class SuggestionBuilder<T extends SuggestionBuilder<T>> implements NamedWriteable, ToXContent {
 
     protected final String field;
     protected String text;
@@ -319,7 +319,7 @@ public abstract class SuggestionBuilder<T extends SuggestionBuilder<T>> extends 
                 suggestionContext.setAnalyzer(fieldType.searchAnalyzer());
             }
         } else {
-            Analyzer luceneAnalyzer = mapperService.analysisService().analyzer(analyzer);
+            Analyzer luceneAnalyzer = mapperService.getIndexAnalyzers().get(analyzer);
             if (luceneAnalyzer == null) {
                 throw new IllegalArgumentException("analyzer [" + analyzer + "] doesn't exists");
             }

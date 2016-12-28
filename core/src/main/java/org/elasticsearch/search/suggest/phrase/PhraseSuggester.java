@@ -34,18 +34,14 @@ import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.text.Text;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.index.query.MatchNoneQueryBuilder;
 import org.elasticsearch.index.query.ParsedQuery;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryParseContext;
 import org.elasticsearch.index.query.QueryShardContext;
-import org.elasticsearch.script.CompiledScript;
 import org.elasticsearch.script.ExecutableScript;
-import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.search.suggest.Suggest.Suggestion;
 import org.elasticsearch.search.suggest.Suggest.Suggestion.Entry;
 import org.elasticsearch.search.suggest.Suggest.Suggestion.Entry.Option;
-import org.elasticsearch.search.suggest.SuggestUtils;
 import org.elasticsearch.search.suggest.Suggester;
 import org.elasticsearch.search.suggest.SuggestionBuilder;
 import org.elasticsearch.search.suggest.SuggestionSearchContext.SuggestionContext;
@@ -55,7 +51,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.function.Function;
 
 public final class PhraseSuggester extends Suggester<PhraseSuggestionContext> {
     private final BytesRef SEPARATOR = new BytesRef(" ");
@@ -84,7 +80,7 @@ public final class PhraseSuggester extends Suggester<PhraseSuggestionContext> {
         final List<CandidateGenerator> gens = new ArrayList<>(generators.size());
         for (int i = 0; i < numGenerators; i++) {
             PhraseSuggestionContext.DirectCandidateGenerator generator = generators.get(i);
-            DirectSpellChecker directSpellChecker = SuggestUtils.getDirectSpellChecker(generator);
+            DirectSpellChecker directSpellChecker = generator.createDirectSpellChecker();
             Terms terms = MultiFields.getTerms(indexReader, generator.field());
             if (terms !=  null) {
                 gens.add(new DirectCandidateGenerator(directSpellChecker, generator.field(), generator.suggestMode(),
@@ -110,7 +106,7 @@ public final class PhraseSuggester extends Suggester<PhraseSuggestionContext> {
             response.addTerm(resultEntry);
 
             final BytesRefBuilder byteSpare = new BytesRefBuilder();
-            final CompiledScript collateScript = suggestion.getCollateQueryScript();
+            final Function<Map<String, Object>, ExecutableScript> collateScript = suggestion.getCollateQueryScript();
             final boolean collatePrune = (collateScript != null) && suggestion.collatePrune();
             for (int i = 0; i < checkerResult.corrections.length; i++) {
                 Correction correction = checkerResult.corrections[i];
@@ -122,12 +118,12 @@ public final class PhraseSuggester extends Suggester<PhraseSuggestionContext> {
                     final Map<String, Object> vars = suggestion.getCollateScriptParams();
                     vars.put(SUGGESTION_TEMPLATE_VAR_NAME, spare.toString());
                     QueryShardContext shardContext = suggestion.getShardContext();
-                    ScriptService scriptService = shardContext.getScriptService();
-                    final ExecutableScript executable = scriptService.executable(collateScript, vars);
+                    final ExecutableScript executable = collateScript.apply(vars);
                     final BytesReference querySource = (BytesReference) executable.run();
-                    try (XContentParser parser = XContentFactory.xContent(querySource).createParser(querySource)) {
-                        Optional<QueryBuilder> innerQueryBuilder = shardContext.newParseContext(parser).parseInnerQueryBuilder();
-                        final ParsedQuery parsedQuery = shardContext.toQuery(innerQueryBuilder.orElse(new MatchNoneQueryBuilder()));
+                    try (XContentParser parser = XContentFactory.xContent(querySource).createParser(shardContext.getXContentRegistry(),
+                            querySource)) {
+                        QueryBuilder innerQueryBuilder = shardContext.newParseContext(parser).parseInnerQueryBuilder();
+                        final ParsedQuery parsedQuery = shardContext.toQuery(innerQueryBuilder);
                         collateMatch = Lucene.exists(searcher, parsedQuery.query());
                     }
                 }

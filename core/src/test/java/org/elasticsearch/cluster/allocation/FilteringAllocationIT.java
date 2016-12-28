@@ -19,12 +19,12 @@
 
 package org.elasticsearch.cluster.allocation;
 
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.routing.IndexRoutingTable;
 import org.elasticsearch.cluster.routing.IndexShardRoutingTable;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.allocation.decider.ThrottlingAllocationDecider;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.query.QueryBuilders;
@@ -39,11 +39,11 @@ import static org.hamcrest.Matchers.equalTo;
 @ClusterScope(scope= Scope.TEST, numDataNodes =0)
 public class FilteringAllocationIT extends ESIntegTestCase {
 
-    private final ESLogger logger = Loggers.getLogger(FilteringAllocationIT.class);
+    private final Logger logger = Loggers.getLogger(FilteringAllocationIT.class);
 
     public void testDecommissionNodeNoReplicas() throws Exception {
         logger.info("--> starting 2 nodes");
-        List<String> nodesIds = internalCluster().startNodesAsync(2).get();
+        List<String> nodesIds = internalCluster().startNodes(2);
         final String node_0 = nodesIds.get(0);
         final String node_1 = nodesIds.get(1);
         assertThat(cluster().size(), equalTo(2));
@@ -82,7 +82,7 @@ public class FilteringAllocationIT extends ESIntegTestCase {
 
     public void testDisablingAllocationFiltering() throws Exception {
         logger.info("--> starting 2 nodes");
-        List<String> nodesIds = internalCluster().startNodesAsync(2).get();
+        List<String> nodesIds = internalCluster().startNodes(2);
         final String node_0 = nodesIds.get(0);
         final String node_1 = nodesIds.get(1);
         assertThat(cluster().size(), equalTo(2));

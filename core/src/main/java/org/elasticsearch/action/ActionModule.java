@@ -20,13 +20,14 @@
 package org.elasticsearch.action;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.admin.cluster.allocation.ClusterAllocationExplainAction;
 import org.elasticsearch.action.admin.cluster.allocation.TransportClusterAllocationExplainAction;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthAction;
@@ -169,8 +170,6 @@ import org.elasticsearch.action.ingest.DeletePipelineAction;
 import org.elasticsearch.action.ingest.DeletePipelineTransportAction;
 import org.elasticsearch.action.ingest.GetPipelineAction;
 import org.elasticsearch.action.ingest.GetPipelineTransportAction;
-import org.elasticsearch.action.ingest.IngestActionFilter;
-import org.elasticsearch.action.ingest.IngestProxyActionFilter;
 import org.elasticsearch.action.ingest.PutPipelineAction;
 import org.elasticsearch.action.ingest.PutPipelineTransportAction;
 import org.elasticsearch.action.ingest.SimulatePipelineAction;
@@ -202,6 +201,7 @@ import org.elasticsearch.common.NamedRegistry;
 import org.elasticsearch.common.inject.AbstractModule;
 import org.elasticsearch.common.inject.multibindings.MapBinder;
 import org.elasticsearch.common.inject.multibindings.Multibinder;
+import org.elasticsearch.common.logging.ESLoggerFactory;
 import org.elasticsearch.common.network.NetworkModule;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
@@ -209,69 +209,70 @@ import org.elasticsearch.plugins.ActionPlugin;
 import org.elasticsearch.plugins.ActionPlugin.ActionHandler;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestHandler;
-import org.elasticsearch.rest.action.admin.cluster.allocation.RestClusterAllocationExplainAction;
-import org.elasticsearch.rest.action.admin.cluster.health.RestClusterHealthAction;
-import org.elasticsearch.rest.action.admin.cluster.node.hotthreads.RestNodesHotThreadsAction;
-import org.elasticsearch.rest.action.admin.cluster.node.info.RestNodesInfoAction;
-import org.elasticsearch.rest.action.admin.cluster.node.stats.RestNodesStatsAction;
-import org.elasticsearch.rest.action.admin.cluster.node.tasks.RestCancelTasksAction;
-import org.elasticsearch.rest.action.admin.cluster.node.tasks.RestGetTaskAction;
-import org.elasticsearch.rest.action.admin.cluster.node.tasks.RestListTasksAction;
-import org.elasticsearch.rest.action.admin.cluster.repositories.delete.RestDeleteRepositoryAction;
-import org.elasticsearch.rest.action.admin.cluster.repositories.get.RestGetRepositoriesAction;
-import org.elasticsearch.rest.action.admin.cluster.repositories.put.RestPutRepositoryAction;
-import org.elasticsearch.rest.action.admin.cluster.repositories.verify.RestVerifyRepositoryAction;
-import org.elasticsearch.rest.action.admin.cluster.reroute.RestClusterRerouteAction;
-import org.elasticsearch.rest.action.admin.cluster.settings.RestClusterGetSettingsAction;
-import org.elasticsearch.rest.action.admin.cluster.settings.RestClusterUpdateSettingsAction;
-import org.elasticsearch.rest.action.admin.cluster.shards.RestClusterSearchShardsAction;
-import org.elasticsearch.rest.action.admin.cluster.snapshots.create.RestCreateSnapshotAction;
-import org.elasticsearch.rest.action.admin.cluster.snapshots.delete.RestDeleteSnapshotAction;
-import org.elasticsearch.rest.action.admin.cluster.snapshots.get.RestGetSnapshotsAction;
-import org.elasticsearch.rest.action.admin.cluster.snapshots.restore.RestRestoreSnapshotAction;
-import org.elasticsearch.rest.action.admin.cluster.snapshots.status.RestSnapshotsStatusAction;
-import org.elasticsearch.rest.action.admin.cluster.state.RestClusterStateAction;
-import org.elasticsearch.rest.action.admin.cluster.stats.RestClusterStatsAction;
-import org.elasticsearch.rest.action.admin.cluster.storedscripts.RestDeleteStoredScriptAction;
-import org.elasticsearch.rest.action.admin.cluster.storedscripts.RestGetStoredScriptAction;
-import org.elasticsearch.rest.action.admin.cluster.storedscripts.RestPutStoredScriptAction;
-import org.elasticsearch.rest.action.admin.cluster.tasks.RestPendingClusterTasksAction;
+import org.elasticsearch.rest.action.RestFieldStatsAction;
+import org.elasticsearch.rest.action.RestMainAction;
+import org.elasticsearch.rest.action.admin.cluster.RestCancelTasksAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterAllocationExplainAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterGetSettingsAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterHealthAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterRerouteAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterSearchShardsAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterStateAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterStatsAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterUpdateSettingsAction;
+import org.elasticsearch.rest.action.admin.cluster.RestCreateSnapshotAction;
+import org.elasticsearch.rest.action.admin.cluster.RestDeleteRepositoryAction;
+import org.elasticsearch.rest.action.admin.cluster.RestDeleteSnapshotAction;
+import org.elasticsearch.rest.action.admin.cluster.RestDeleteStoredScriptAction;
+import org.elasticsearch.rest.action.admin.cluster.RestGetRepositoriesAction;
+import org.elasticsearch.rest.action.admin.cluster.RestGetSnapshotsAction;
+import org.elasticsearch.rest.action.admin.cluster.RestGetStoredScriptAction;
+import org.elasticsearch.rest.action.admin.cluster.RestGetTaskAction;
+import org.elasticsearch.rest.action.admin.cluster.RestListTasksAction;
+import org.elasticsearch.rest.action.admin.cluster.RestNodesHotThreadsAction;
+import org.elasticsearch.rest.action.admin.cluster.RestNodesInfoAction;
+import org.elasticsearch.rest.action.admin.cluster.RestNodesStatsAction;
+import org.elasticsearch.rest.action.admin.cluster.RestPendingClusterTasksAction;
+import org.elasticsearch.rest.action.admin.cluster.RestPutRepositoryAction;
+import org.elasticsearch.rest.action.admin.cluster.RestPutStoredScriptAction;
+import org.elasticsearch.rest.action.admin.cluster.RestRestoreSnapshotAction;
+import org.elasticsearch.rest.action.admin.cluster.RestSnapshotsStatusAction;
+import org.elasticsearch.rest.action.admin.cluster.RestVerifyRepositoryAction;
+import org.elasticsearch.rest.action.admin.indices.RestAliasesExistAction;
+import org.elasticsearch.rest.action.admin.indices.RestAnalyzeAction;
+import org.elasticsearch.rest.action.admin.indices.RestClearIndicesCacheAction;
+import org.elasticsearch.rest.action.admin.indices.RestCloseIndexAction;
+import org.elasticsearch.rest.action.admin.indices.RestCreateIndexAction;
+import org.elasticsearch.rest.action.admin.indices.RestDeleteIndexAction;
+import org.elasticsearch.rest.action.admin.indices.RestDeleteIndexTemplateAction;
+import org.elasticsearch.rest.action.admin.indices.RestFlushAction;
+import org.elasticsearch.rest.action.admin.indices.RestForceMergeAction;
+import org.elasticsearch.rest.action.admin.indices.RestGetAliasesAction;
+import org.elasticsearch.rest.action.admin.indices.RestGetFieldMappingAction;
+import org.elasticsearch.rest.action.admin.indices.RestGetIndexTemplateAction;
+import org.elasticsearch.rest.action.admin.indices.RestGetIndicesAction;
+import org.elasticsearch.rest.action.admin.indices.RestGetMappingAction;
+import org.elasticsearch.rest.action.admin.indices.RestGetSettingsAction;
+import org.elasticsearch.rest.action.admin.indices.RestHeadIndexTemplateAction;
+import org.elasticsearch.rest.action.admin.indices.RestIndexDeleteAliasesAction;
+import org.elasticsearch.rest.action.admin.indices.RestIndexPutAliasAction;
+import org.elasticsearch.rest.action.admin.indices.RestIndicesAliasesAction;
+import org.elasticsearch.rest.action.admin.indices.RestIndicesExistsAction;
+import org.elasticsearch.rest.action.admin.indices.RestIndicesSegmentsAction;
+import org.elasticsearch.rest.action.admin.indices.RestIndicesShardStoresAction;
+import org.elasticsearch.rest.action.admin.indices.RestIndicesStatsAction;
+import org.elasticsearch.rest.action.admin.indices.RestOpenIndexAction;
+import org.elasticsearch.rest.action.admin.indices.RestPutIndexTemplateAction;
+import org.elasticsearch.rest.action.admin.indices.RestPutMappingAction;
+import org.elasticsearch.rest.action.admin.indices.RestRecoveryAction;
+import org.elasticsearch.rest.action.admin.indices.RestRefreshAction;
 import org.elasticsearch.rest.action.admin.indices.RestRolloverIndexAction;
 import org.elasticsearch.rest.action.admin.indices.RestShrinkIndexAction;
-import org.elasticsearch.rest.action.admin.indices.alias.RestIndicesAliasesAction;
-import org.elasticsearch.rest.action.admin.indices.alias.delete.RestIndexDeleteAliasesAction;
-import org.elasticsearch.rest.action.admin.indices.alias.get.RestGetAliasesAction;
-import org.elasticsearch.rest.action.admin.indices.alias.head.RestAliasesExistAction;
-import org.elasticsearch.rest.action.admin.indices.alias.put.RestIndexPutAliasAction;
-import org.elasticsearch.rest.action.admin.indices.analyze.RestAnalyzeAction;
-import org.elasticsearch.rest.action.admin.indices.cache.clear.RestClearIndicesCacheAction;
-import org.elasticsearch.rest.action.admin.indices.close.RestCloseIndexAction;
-import org.elasticsearch.rest.action.admin.indices.create.RestCreateIndexAction;
-import org.elasticsearch.rest.action.admin.indices.delete.RestDeleteIndexAction;
-import org.elasticsearch.rest.action.admin.indices.exists.indices.RestIndicesExistsAction;
-import org.elasticsearch.rest.action.admin.indices.exists.types.RestTypesExistsAction;
-import org.elasticsearch.rest.action.admin.indices.flush.RestFlushAction;
-import org.elasticsearch.rest.action.admin.indices.flush.RestSyncedFlushAction;
-import org.elasticsearch.rest.action.admin.indices.forcemerge.RestForceMergeAction;
-import org.elasticsearch.rest.action.admin.indices.get.RestGetIndicesAction;
-import org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetFieldMappingAction;
-import org.elasticsearch.rest.action.admin.indices.mapping.get.RestGetMappingAction;
-import org.elasticsearch.rest.action.admin.indices.mapping.put.RestPutMappingAction;
-import org.elasticsearch.rest.action.admin.indices.open.RestOpenIndexAction;
-import org.elasticsearch.rest.action.admin.indices.recovery.RestRecoveryAction;
-import org.elasticsearch.rest.action.admin.indices.refresh.RestRefreshAction;
-import org.elasticsearch.rest.action.admin.indices.segments.RestIndicesSegmentsAction;
-import org.elasticsearch.rest.action.admin.indices.settings.RestGetSettingsAction;
-import org.elasticsearch.rest.action.admin.indices.settings.RestUpdateSettingsAction;
-import org.elasticsearch.rest.action.admin.indices.shards.RestIndicesShardStoresAction;
-import org.elasticsearch.rest.action.admin.indices.stats.RestIndicesStatsAction;
-import org.elasticsearch.rest.action.admin.indices.template.delete.RestDeleteIndexTemplateAction;
-import org.elasticsearch.rest.action.admin.indices.template.get.RestGetIndexTemplateAction;
-import org.elasticsearch.rest.action.admin.indices.template.head.RestHeadIndexTemplateAction;
-import org.elasticsearch.rest.action.admin.indices.template.put.RestPutIndexTemplateAction;
-import org.elasticsearch.rest.action.admin.indices.upgrade.RestUpgradeAction;
-import org.elasticsearch.rest.action.admin.indices.validate.query.RestValidateQueryAction;
-import org.elasticsearch.rest.action.bulk.RestBulkAction;
+import org.elasticsearch.rest.action.admin.indices.RestSyncedFlushAction;
+import org.elasticsearch.rest.action.admin.indices.RestTypesExistsAction;
+import org.elasticsearch.rest.action.admin.indices.RestUpdateSettingsAction;
+import org.elasticsearch.rest.action.admin.indices.RestUpgradeAction;
+import org.elasticsearch.rest.action.admin.indices.RestValidateQueryAction;
 import org.elasticsearch.rest.action.cat.AbstractCatAction;
 import org.elasticsearch.rest.action.cat.RestAliasAction;
 import org.elasticsearch.rest.action.cat.RestAllocationAction;
@@ -288,28 +289,28 @@ import org.elasticsearch.rest.action.cat.RestSegmentsAction;
 import org.elasticsearch.rest.action.cat.RestShardsAction;
 import org.elasticsearch.rest.action.cat.RestSnapshotAction;
 import org.elasticsearch.rest.action.cat.RestTasksAction;
+import org.elasticsearch.rest.action.cat.RestTemplatesAction;
 import org.elasticsearch.rest.action.cat.RestThreadPoolAction;
-import org.elasticsearch.rest.action.delete.RestDeleteAction;
-import org.elasticsearch.rest.action.explain.RestExplainAction;
-import org.elasticsearch.rest.action.fieldstats.RestFieldStatsAction;
-import org.elasticsearch.rest.action.get.RestGetAction;
-import org.elasticsearch.rest.action.get.RestGetSourceAction;
-import org.elasticsearch.rest.action.get.RestHeadAction;
-import org.elasticsearch.rest.action.get.RestMultiGetAction;
-import org.elasticsearch.rest.action.index.RestIndexAction;
+import org.elasticsearch.rest.action.document.RestBulkAction;
+import org.elasticsearch.rest.action.document.RestDeleteAction;
+import org.elasticsearch.rest.action.document.RestGetAction;
+import org.elasticsearch.rest.action.document.RestGetSourceAction;
+import org.elasticsearch.rest.action.document.RestHeadAction;
+import org.elasticsearch.rest.action.document.RestIndexAction;
+import org.elasticsearch.rest.action.document.RestMultiGetAction;
+import org.elasticsearch.rest.action.document.RestMultiTermVectorsAction;
+import org.elasticsearch.rest.action.document.RestTermVectorsAction;
+import org.elasticsearch.rest.action.document.RestUpdateAction;
 import org.elasticsearch.rest.action.ingest.RestDeletePipelineAction;
 import org.elasticsearch.rest.action.ingest.RestGetPipelineAction;
 import org.elasticsearch.rest.action.ingest.RestPutPipelineAction;
 import org.elasticsearch.rest.action.ingest.RestSimulatePipelineAction;
-import org.elasticsearch.rest.action.main.RestMainAction;
 import org.elasticsearch.rest.action.search.RestClearScrollAction;
+import org.elasticsearch.rest.action.search.RestExplainAction;
 import org.elasticsearch.rest.action.search.RestMultiSearchAction;
 import org.elasticsearch.rest.action.search.RestSearchAction;
 import org.elasticsearch.rest.action.search.RestSearchScrollAction;
-import org.elasticsearch.rest.action.suggest.RestSuggestAction;
-import org.elasticsearch.rest.action.termvectors.RestMultiTermVectorsAction;
-import org.elasticsearch.rest.action.termvectors.RestTermVectorsAction;
-import org.elasticsearch.rest.action.update.RestUpdateAction;
+import org.elasticsearch.threadpool.ThreadPool;
 
 import static java.util.Collections.unmodifiableList;
 import static java.util.Collections.unmodifiableMap;
@@ -318,6 +319,8 @@ import static java.util.Collections.unmodifiableMap;
  * Builds and binds the generic action map, all {@link TransportAction}s, and {@link ActionFilters}.
  */
 public class ActionModule extends AbstractModule {
+
+    private static final Logger logger = ESLoggerFactory.getLogger(ActionModule.class);
 
     private final boolean transportClient;
     private final Settings settings;
@@ -328,17 +331,28 @@ public class ActionModule extends AbstractModule {
     private final DestructiveOperations destructiveOperations;
     private final RestController restController;
 
-    public ActionModule(boolean ingestEnabled, boolean transportClient, Settings settings, IndexNameExpressionResolver resolver,
-            ClusterSettings clusterSettings, List<ActionPlugin> actionPlugins) {
+    public ActionModule(boolean transportClient, Settings settings, IndexNameExpressionResolver resolver,
+                        ClusterSettings clusterSettings, ThreadPool threadPool, List<ActionPlugin> actionPlugins) {
         this.transportClient = transportClient;
         this.settings = settings;
         this.actionPlugins = actionPlugins;
         actions = setupActions(actionPlugins);
-        actionFilters = setupActionFilters(actionPlugins, ingestEnabled);
-        autoCreateIndex = transportClient ? null : new AutoCreateIndex(settings, resolver);
+        actionFilters = setupActionFilters(actionPlugins);
+        autoCreateIndex = transportClient ? null : new AutoCreateIndex(settings, clusterSettings, resolver);
         destructiveOperations = new DestructiveOperations(settings, clusterSettings);
         Set<String> headers = actionPlugins.stream().flatMap(p -> p.getRestHeaders().stream()).collect(Collectors.toSet());
-        restController = new RestController(settings, headers);
+        UnaryOperator<RestHandler> restWrapper = null;
+        for (ActionPlugin plugin : actionPlugins) {
+            UnaryOperator<RestHandler> newRestWrapper = plugin.getRestHandlerWrapper(threadPool.getThreadContext());
+            if (newRestWrapper != null) {
+                logger.debug("Using REST wrapper from plugin " + plugin.getClass().getName());
+                if (restWrapper != null) {
+                    throw new IllegalArgumentException("Cannot have more than one plugin implementing a REST wrapper");
+                }
+                restWrapper = newRestWrapper;
+            }
+        }
+        restController = new RestController(settings, headers, restWrapper);
     }
 
     public Map<String, ActionHandler<?, ?>> getActions() {
@@ -356,7 +370,7 @@ public class ActionModule extends AbstractModule {
                 register(handler.getAction().name(), handler);
             }
 
-            public <Request extends ActionRequest<Request>, Response extends ActionResponse> void register(
+            public <Request extends ActionRequest, Response extends ActionResponse> void register(
                     GenericAction<Request, Response> action, Class<? extends TransportAction<Request, Response>> transportAction,
                     Class<?>... supportTransportActions) {
                 register(new ActionHandler<>(action, transportAction, supportTransportActions));
@@ -460,20 +474,8 @@ public class ActionModule extends AbstractModule {
         return unmodifiableMap(actions.getRegistry());
     }
 
-    private List<Class<? extends ActionFilter>> setupActionFilters(List<ActionPlugin> actionPlugins, boolean ingestEnabled) {
-        List<Class<? extends ActionFilter>> filters = new ArrayList<>();
-        if (transportClient == false) {
-            if (ingestEnabled) {
-                filters.add(IngestActionFilter.class);
-            } else {
-                filters.add(IngestProxyActionFilter.class);
-            }
-        }
-
-        for (ActionPlugin plugin : actionPlugins) {
-            filters.addAll(plugin.getActionFilters());
-        }
-        return unmodifiableList(filters);
+    private List<Class<? extends ActionFilter>> setupActionFilters(List<ActionPlugin> actionPlugins) {
+        return unmodifiableList(actionPlugins.stream().flatMap(p -> p.getActionFilters().stream()).collect(Collectors.toList()));
     }
 
     static Set<Class<? extends RestHandler>> setupRestHandlers(List<ActionPlugin> actionPlugins) {
@@ -546,8 +548,7 @@ public class ActionModule extends AbstractModule {
         registerRestHandler(handlers, RestHeadAction.Source.class);
         registerRestHandler(handlers, RestMultiGetAction.class);
         registerRestHandler(handlers, RestDeleteAction.class);
-        registerRestHandler(handlers, org.elasticsearch.rest.action.count.RestCountAction.class);
-        registerRestHandler(handlers, RestSuggestAction.class);
+        registerRestHandler(handlers, org.elasticsearch.rest.action.document.RestCountAction.class);
         registerRestHandler(handlers, RestTermVectorsAction.class);
         registerRestHandler(handlers, RestMultiTermVectorsAction.class);
         registerRestHandler(handlers, RestBulkAction.class);
@@ -604,6 +605,7 @@ public class ActionModule extends AbstractModule {
         registerRestHandler(handlers, RestNodeAttrsAction.class);
         registerRestHandler(handlers, RestRepositoriesAction.class);
         registerRestHandler(handlers, RestSnapshotAction.class);
+        registerRestHandler(handlers, RestTemplatesAction.class);
         for (ActionPlugin plugin : actionPlugins) {
             for (Class<? extends RestHandler> handler : plugin.getRestHandlers()) {
                 registerRestHandler(handlers, handler);
@@ -663,5 +665,9 @@ public class ActionModule extends AbstractModule {
                 }
             }
         }
+    }
+
+    public RestController getRestController() {
+        return restController;
     }
 }

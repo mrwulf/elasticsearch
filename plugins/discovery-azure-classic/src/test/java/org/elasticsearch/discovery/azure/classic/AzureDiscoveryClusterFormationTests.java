@@ -64,9 +64,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoTimeout;
-
-@ESIntegTestCase.SuppressLocalMode
 @ESIntegTestCase.ClusterScope(numDataNodes = 2, numClientNodes = 0)
 @SuppressForbidden(reason = "use http server")
 // TODO this should be a IT but currently all ITs in this project run against a real cluster
@@ -84,7 +81,7 @@ public class AzureDiscoveryClusterFormationTests extends ESIntegTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return pluginList(AzureDiscoveryPlugin.class, TestPlugin.class);
+        return Arrays.asList(AzureDiscoveryPlugin.class, TestPlugin.class);
     }
 
     private static Path keyStoreFile;
@@ -270,7 +267,7 @@ public class AzureDiscoveryClusterFormationTests extends ESIntegTestCase {
         // only wait for the cluster to form
         ensureClusterSizeConsistency();
         // add one more node and wait for it to join
-        internalCluster().startDataOnlyNodeAsync().get();
+        internalCluster().startDataOnlyNode();
         ensureClusterSizeConsistency();
     }
 }

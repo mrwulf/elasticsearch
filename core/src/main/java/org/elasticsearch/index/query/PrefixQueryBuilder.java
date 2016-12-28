@@ -36,7 +36,6 @@ import org.elasticsearch.index.query.support.QueryParsers;
 
 import java.io.IOException;
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * A Query that matches documents containing terms with a specified prefix.
@@ -64,7 +63,7 @@ public class PrefixQueryBuilder extends AbstractQueryBuilder<PrefixQueryBuilder>
             throw new IllegalArgumentException("field name is null or empty");
         }
         if (value == null) {
-            throw new IllegalArgumentException("value cannot be null.");
+            throw new IllegalArgumentException("value cannot be null");
         }
         this.fieldName = fieldName;
         this.value = value;
@@ -117,10 +116,10 @@ public class PrefixQueryBuilder extends AbstractQueryBuilder<PrefixQueryBuilder>
         builder.endObject();
     }
 
-    public static Optional<PrefixQueryBuilder> fromXContent(QueryParseContext parseContext) throws IOException {
+    public static PrefixQueryBuilder fromXContent(QueryParseContext parseContext) throws IOException {
         XContentParser parser = parseContext.parser();
 
-        String fieldName = parser.currentName();
+        String fieldName = null;
         String value = null;
         String rewrite = null;
 
@@ -134,6 +133,7 @@ public class PrefixQueryBuilder extends AbstractQueryBuilder<PrefixQueryBuilder>
             } else if (parseContext.isDeprecatedSetting(currentFieldName)) {
                 // skip
             } else if (token == XContentParser.Token.START_OBJECT) {
+                throwParsingExceptionOnMultipleFields(NAME, parser.getTokenLocation(), fieldName, currentFieldName);
                 fieldName = currentFieldName;
                 while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
                     if (token == XContentParser.Token.FIELD_NAME) {
@@ -149,23 +149,21 @@ public class PrefixQueryBuilder extends AbstractQueryBuilder<PrefixQueryBuilder>
                             rewrite = parser.textOrNull();
                         } else {
                             throw new ParsingException(parser.getTokenLocation(),
-                                    "[regexp] query does not support [" + currentFieldName + "]");
+                                    "[prefix] query does not support [" + currentFieldName + "]");
                         }
                     }
                 }
             } else {
-                    fieldName = currentFieldName;
-                    value = parser.textOrNull();
+                throwParsingExceptionOnMultipleFields(NAME, parser.getTokenLocation(), fieldName, parser.currentName());
+                fieldName = currentFieldName;
+                value = parser.textOrNull();
             }
         }
 
-        if (value == null) {
-            throw new ParsingException(parser.getTokenLocation(), "No value specified for prefix query");
-        }
-        return Optional.of(new PrefixQueryBuilder(fieldName, value)
+        return new PrefixQueryBuilder(fieldName, value)
                 .rewrite(rewrite)
                 .boost(boost)
-                .queryName(queryName));
+                .queryName(queryName);
     }
 
     @Override

@@ -37,13 +37,12 @@ import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.fielddata.IndexParentChildFieldData;
 import org.elasticsearch.index.fielddata.plain.ParentChildIndexFieldData;
 import org.elasticsearch.index.mapper.DocumentMapper;
-import org.elasticsearch.index.mapper.internal.ParentFieldMapper;
+import org.elasticsearch.index.mapper.ParentFieldMapper;
 
 import java.io.IOException;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * A query builder for <tt>has_child</tt> query.
@@ -146,8 +145,8 @@ public class HasChildQueryBuilder extends AbstractQueryBuilder<HasChildQueryBuil
         return innerHitBuilder;
     }
 
-    public HasChildQueryBuilder innerHit(InnerHitBuilder innerHit) {
-        this.innerHitBuilder = new InnerHitBuilder(Objects.requireNonNull(innerHit), query, type);
+    public HasChildQueryBuilder innerHit(InnerHitBuilder innerHit, boolean ignoreUnmapped) {
+        this.innerHitBuilder = new InnerHitBuilder(Objects.requireNonNull(innerHit), query, type, ignoreUnmapped);
         return this;
     }
 
@@ -222,7 +221,7 @@ public class HasChildQueryBuilder extends AbstractQueryBuilder<HasChildQueryBuil
         builder.endObject();
     }
 
-    public static Optional<HasChildQueryBuilder> fromXContent(QueryParseContext parseContext) throws IOException {
+    public static HasChildQueryBuilder fromXContent(QueryParseContext parseContext) throws IOException {
         XContentParser parser = parseContext.parser();
         float boost = AbstractQueryBuilder.DEFAULT_BOOST;
         String childType = null;
@@ -234,7 +233,7 @@ public class HasChildQueryBuilder extends AbstractQueryBuilder<HasChildQueryBuil
         InnerHitBuilder innerHitBuilder = null;
         String currentFieldName = null;
         XContentParser.Token token;
-        Optional<QueryBuilder> iqb = Optional.empty();
+        QueryBuilder iqb = null;
         while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
             if (token == XContentParser.Token.FIELD_NAME) {
                 currentFieldName = parser.currentName();
@@ -268,21 +267,15 @@ public class HasChildQueryBuilder extends AbstractQueryBuilder<HasChildQueryBuil
                 }
             }
         }
-
-        if (iqb.isPresent() == false) {
-            // if inner query is empty, bubble this up to caller so they can decide how to deal with it
-            return Optional.empty();
-        }
-
-        HasChildQueryBuilder hasChildQueryBuilder = new HasChildQueryBuilder(childType, iqb.get(), scoreMode);
-        if (innerHitBuilder != null) {
-            hasChildQueryBuilder.innerHit(innerHitBuilder);
-        }
+        HasChildQueryBuilder hasChildQueryBuilder = new HasChildQueryBuilder(childType, iqb, scoreMode);
         hasChildQueryBuilder.minMaxChildren(minChildren, maxChildren);
         hasChildQueryBuilder.queryName(queryName);
         hasChildQueryBuilder.boost(boost);
         hasChildQueryBuilder.ignoreUnmapped(ignoreUnmapped);
-        return Optional.of(hasChildQueryBuilder);
+        if (innerHitBuilder != null) {
+            hasChildQueryBuilder.innerHit(innerHitBuilder, ignoreUnmapped);
+        }
+        return hasChildQueryBuilder;
     }
 
     public static ScoreMode parseScoreMode(String scoreModeString) {
@@ -325,7 +318,7 @@ public class HasChildQueryBuilder extends AbstractQueryBuilder<HasChildQueryBuil
             context.setTypes(previousTypes);
         }
 
-        DocumentMapper childDocMapper = context.getMapperService().documentMapper(type);
+        DocumentMapper childDocMapper = context.documentMapper(type);
         if (childDocMapper == null) {
             if (ignoreUnmapped) {
                 return new MatchNoDocsQuery();
@@ -352,7 +345,17 @@ public class HasChildQueryBuilder extends AbstractQueryBuilder<HasChildQueryBuil
                                     parentType, scoreMode, parentChildIndexFieldData, context.getSearchSimilarity());
     }
 
-    static final class LateParsingQuery extends Query {
+    /**
+     * A query that rewrites into another query using
+     * {@link JoinUtil#createJoinQuery(String, Query, Query, IndexSearcher, ScoreMode, MultiDocValues.OrdinalMap, int, int)}
+     * that executes the actual join.
+     *
+     * This query is exclusively used by the {@link HasChildQueryBuilder} and {@link HasParentQueryBuilder} to get access
+     * to the {@link DirectoryReader} used by the current search in order to retrieve the {@link MultiDocValues.OrdinalMap}.
+     * The {@link MultiDocValues.OrdinalMap} is required by {@link JoinUtil} to execute the join.
+     */
+    // TODO: Find a way to remove this query and let doToQuery(...) just return the query from JoinUtil.createJoinQuery(...)
+    public static final class LateParsingQuery extends Query {
 
         private final Query toQuery;
         private final Query innerQuery;

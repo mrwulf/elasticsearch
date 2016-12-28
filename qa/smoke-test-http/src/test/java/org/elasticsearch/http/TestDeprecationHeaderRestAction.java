@@ -23,15 +23,14 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.BytesRestResponse;
-import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestStatus;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -80,10 +79,10 @@ public class TestDeprecationHeaderRestAction extends BaseRestHandler {
 
     @SuppressWarnings("unchecked") // List<String> casts
     @Override
-    public void handleRequest(RestRequest request, RestChannel channel, NodeClient client) throws Exception {
+    public RestChannelConsumer prepareRequest(RestRequest request, NodeClient client) throws IOException {
         final List<String> settings;
 
-        try (XContentParser parser = XContentFactory.xContent(request.content()).createParser(request.content())) {
+        try (XContentParser parser = request.contentParser()) {
             final Map<String, Object> source = parser.map();
 
             if (source.containsKey("deprecated_settings")) {
@@ -95,14 +94,15 @@ public class TestDeprecationHeaderRestAction extends BaseRestHandler {
             }
         }
 
-        final XContentBuilder builder = channel.newBuilder();
+        return channel -> {
+            final XContentBuilder builder = channel.newBuilder();
 
-        builder.startObject().startArray("settings");
-        for (String setting : settings) {
-            builder.startObject().field(setting, SETTINGS.get(setting).getRaw(this.settings)).endObject();
-        }
-        builder.endArray().endObject();
-
-        channel.sendResponse(new BytesRestResponse(RestStatus.OK, builder));
+            builder.startObject().startArray("settings");
+            for (String setting : settings) {
+                builder.startObject().field(setting, SETTINGS.get(setting).getRaw(this.settings)).endObject();
+            }
+            builder.endArray().endObject();
+            channel.sendResponse(new BytesRestResponse(RestStatus.OK, builder));
+        };
     }
 }

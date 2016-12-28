@@ -27,6 +27,7 @@ import org.elasticsearch.common.collect.ImmutableOpenIntMap;
 import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.io.stream.Writeable.Reader;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -135,22 +136,22 @@ public final class DiffableUtils {
     /**
      * Loads an object that represents difference between two ImmutableOpenMaps of Diffable objects using Diffable proto object
      */
-    public static <K, T extends Diffable<T>> MapDiff<K, T, ImmutableOpenMap<K, T>> readImmutableOpenMapDiff(StreamInput in, KeySerializer<K> keySerializer, T proto) throws IOException {
-        return new ImmutableOpenMapDiff<>(in, keySerializer, new DiffablePrototypeValueReader<>(proto));
+    public static <K, T extends Diffable<T>> MapDiff<K, T, ImmutableOpenMap<K, T>> readImmutableOpenMapDiff(StreamInput in, KeySerializer<K> keySerializer, Reader<T> reader, Reader<Diff<T>> diffReader) throws IOException {
+        return new ImmutableOpenMapDiff<>(in, keySerializer, new DiffableValueReader<>(reader, diffReader));
     }
 
     /**
      * Loads an object that represents difference between two ImmutableOpenIntMaps of Diffable objects using Diffable proto object
      */
-    public static <T extends Diffable<T>> MapDiff<Integer, T, ImmutableOpenIntMap<T>> readImmutableOpenIntMapDiff(StreamInput in, KeySerializer<Integer> keySerializer, T proto) throws IOException {
-        return new ImmutableOpenIntMapDiff<>(in, keySerializer, new DiffablePrototypeValueReader<>(proto));
+    public static <T extends Diffable<T>> MapDiff<Integer, T, ImmutableOpenIntMap<T>> readImmutableOpenIntMapDiff(StreamInput in, KeySerializer<Integer> keySerializer, Reader<T> reader, Reader<Diff<T>> diffReader) throws IOException {
+        return new ImmutableOpenIntMapDiff<>(in, keySerializer, new DiffableValueReader<>(reader, diffReader));
     }
 
     /**
      * Loads an object that represents difference between two Maps of Diffable objects using Diffable proto object
      */
-    public static <K, T extends Diffable<T>> MapDiff<K, T, Map<K, T>> readJdkMapDiff(StreamInput in, KeySerializer<K> keySerializer, T proto) throws IOException {
-        return new JdkMapDiff<>(in, keySerializer, new DiffablePrototypeValueReader<>(proto));
+    public static <K, T extends Diffable<T>> MapDiff<K, T, Map<K, T>> readJdkMapDiff(StreamInput in, KeySerializer<K> keySerializer, Reader<T> reader, Reader<Diff<T>> diffReader) throws IOException {
+        return new JdkMapDiff<>(in, keySerializer, new DiffableValueReader<>(reader, diffReader));
     }
 
     /**
@@ -214,10 +215,15 @@ public final class DiffableUtils {
      *
      * @param <T> the object type
      */
-    private static class ImmutableOpenMapDiff<K, T> extends MapDiff<K, T, ImmutableOpenMap<K, T>> {
+    public static class ImmutableOpenMapDiff<K, T> extends MapDiff<K, T, ImmutableOpenMap<K, T>> {
 
         protected ImmutableOpenMapDiff(StreamInput in, KeySerializer<K> keySerializer, ValueSerializer<K, T> valueSerializer) throws IOException {
             super(in, keySerializer, valueSerializer);
+        }
+
+        private ImmutableOpenMapDiff(KeySerializer<K> keySerializer, ValueSerializer<K, T> valueSerializer,
+                                     List<K> deletes, Map<K, Diff<T>> diffs, Map<K, T> upserts) {
+            super(keySerializer, valueSerializer, deletes, diffs, upserts);
         }
 
         public ImmutableOpenMapDiff(ImmutableOpenMap<K, T> before, ImmutableOpenMap<K, T> after,
@@ -243,6 +249,21 @@ public final class DiffableUtils {
                     }
                 }
             }
+        }
+
+        /**
+         * Returns a new diff map with the given key removed, does not modify the invoking instance.
+         * If the key does not exist in the diff map, the same instance is returned.
+         */
+        public ImmutableOpenMapDiff<K, T> withKeyRemoved(K key) {
+            if (this.diffs.containsKey(key) == false && this.upserts.containsKey(key) == false) {
+                return this;
+            }
+            Map<K, Diff<T>> newDiffs = new HashMap<>(this.diffs);
+            newDiffs.remove(key);
+            Map<K, T> newUpserts = new HashMap<>(this.upserts);
+            newUpserts.remove(key);
+            return new ImmutableOpenMapDiff<>(this.keySerializer, this.valueSerializer, this.deletes, newDiffs, newUpserts);
         }
 
         @Override
@@ -344,6 +365,15 @@ public final class DiffableUtils {
             deletes = new ArrayList<>();
             diffs = new HashMap<>();
             upserts = new HashMap<>();
+        }
+
+        protected MapDiff(KeySerializer<K> keySerializer, ValueSerializer<K, T> valueSerializer,
+                          List<K> deletes, Map<K, Diff<T>> diffs, Map<K, T> upserts) {
+            this.keySerializer = keySerializer;
+            this.valueSerializer = valueSerializer;
+            this.deletes = deletes;
+            this.diffs = diffs;
+            this.upserts = upserts;
         }
 
         protected MapDiff(StreamInput in, KeySerializer<K> keySerializer, ValueSerializer<K, T> valueSerializer) throws IOException {
@@ -600,25 +630,27 @@ public final class DiffableUtils {
     }
 
     /**
-     * Implementation of the ValueSerializer that uses a prototype object for reading operations
+     * Implementation of the ValueSerializer that wraps value and diff readers.
      *
      * Note: this implementation is ignoring the key.
      */
-    public static class DiffablePrototypeValueReader<K, V extends Diffable<V>> extends DiffableValueSerializer<K, V> {
-        private final V proto;
+    public static class DiffableValueReader<K, V extends Diffable<V>> extends DiffableValueSerializer<K, V> {
+        private final Reader<V> reader;
+        private final Reader<Diff<V>> diffReader;
 
-        public DiffablePrototypeValueReader(V proto) {
-            this.proto = proto;
+        public DiffableValueReader(Reader<V> reader, Reader<Diff<V>> diffReader) {
+            this.reader = reader;
+            this.diffReader = diffReader;
         }
 
         @Override
         public V read(StreamInput in, K key) throws IOException {
-            return proto.readFrom(in);
+            return reader.read(in);
         }
 
         @Override
         public Diff<V> readDiff(StreamInput in, K key) throws IOException {
-            return proto.readDiffFrom(in);
+            return diffReader.read(in);
         }
     }
 

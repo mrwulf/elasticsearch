@@ -30,6 +30,7 @@ import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParser;
@@ -86,22 +87,30 @@ final class RemoteRequestBuilders {
                 for (int i = 1; i < searchRequest.source().sorts().size(); i++) {
                     sorts.append(',').append(sortToUri(searchRequest.source().sorts().get(i)));
                 }
-                params.put("sorts", sorts.toString());
+                params.put("sort", sorts.toString());
             }
         }
-        if (searchRequest.source().storedFields() != null && false == searchRequest.source().storedFields().isEmpty()) {
-            StringBuilder fields = new StringBuilder(searchRequest.source().storedFields().get(0));
-            for (int i = 1; i < searchRequest.source().storedFields().size(); i++) {
-                fields.append(',').append(searchRequest.source().storedFields().get(i));
+        if (remoteVersion.before(Version.V_2_0_0)) {
+            // Versions before 2.0.0 need prompting to return interesting fields. Note that timestamp isn't available at all....
+            searchRequest.source().storedField("_parent").storedField("_routing").storedField("_ttl");
+        }
+        if (searchRequest.source().storedFields() != null && false == searchRequest.source().storedFields().fieldNames().isEmpty()) {
+            StringBuilder fields = new StringBuilder(searchRequest.source().storedFields().fieldNames().get(0));
+            for (int i = 1; i < searchRequest.source().storedFields().fieldNames().size(); i++) {
+                fields.append(',').append(searchRequest.source().storedFields().fieldNames().get(i));
             }
             String storedFieldsParamName = remoteVersion.before(Version.V_5_0_0_alpha4) ? "fields" : "stored_fields";
             params.put(storedFieldsParamName, fields.toString());
         }
+        // We always want the _source document and this will force it to be returned.
+        params.put("_source", "true");
         return params;
     }
 
     static HttpEntity initialSearchEntity(BytesReference query) {
-        try (XContentBuilder entity = JsonXContent.contentBuilder(); XContentParser queryParser = XContentHelper.createParser(query)) {
+        // EMPTY is safe here because we're not calling namedObject
+        try (XContentBuilder entity = JsonXContent.contentBuilder();
+                XContentParser queryParser = XContentHelper.createParser(NamedXContentRegistry.EMPTY, query)) {
             entity.startObject();
             entity.field("query");
             /*

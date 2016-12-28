@@ -32,11 +32,10 @@ import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.fielddata.IndexNumericFieldData;
+import org.elasticsearch.index.mapper.BaseGeoPointFieldMapper;
+import org.elasticsearch.index.mapper.DateFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.MapperService;
-import org.elasticsearch.index.mapper.core.DateFieldMapper;
-import org.elasticsearch.index.mapper.core.LegacyDateFieldMapper;
-import org.elasticsearch.index.mapper.geo.BaseGeoPointFieldMapper;
 import org.elasticsearch.script.ClassPermission;
 import org.elasticsearch.script.CompiledScript;
 import org.elasticsearch.script.ExecutableScript;
@@ -200,8 +199,7 @@ public class ExpressionScriptEngineService extends AbstractComponent implements 
                         } else {
                             valueSource = GeoField.getMethod(fieldData, fieldname, methodname);
                         }
-                    } else if (fieldType instanceof LegacyDateFieldMapper.DateFieldType ||
-                            fieldType instanceof DateFieldMapper.DateFieldType) {
+                    } else if (fieldType instanceof DateFieldMapper.DateFieldType) {
                         if (dateAccessor) {
                             // date object
                             if (methodname == null) {

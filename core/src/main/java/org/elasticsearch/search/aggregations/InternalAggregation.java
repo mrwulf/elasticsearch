@@ -18,7 +18,6 @@
  */
 package org.elasticsearch.search.aggregations;
 
-import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.io.stream.NamedWriteable;
 import org.elasticsearch.common.io.stream.StreamInput;
@@ -33,6 +32,7 @@ import org.elasticsearch.search.aggregations.support.AggregationPath;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * An internal implementation of {@link Aggregation}. Serves as a base class for all aggregation implementations.
@@ -69,12 +69,10 @@ public abstract class InternalAggregation implements Aggregation, ToXContent, Na
 
         private final BigArrays bigArrays;
         private final ScriptService scriptService;
-        private final ClusterState clusterState;
 
-        public ReduceContext(BigArrays bigArrays, ScriptService scriptService, ClusterState clusterState) {
+        public ReduceContext(BigArrays bigArrays, ScriptService scriptService) {
             this.bigArrays = bigArrays;
             this.scriptService = scriptService;
-            this.clusterState = clusterState;
         }
 
         public BigArrays bigArrays() {
@@ -83,10 +81,6 @@ public abstract class InternalAggregation implements Aggregation, ToXContent, Na
 
         public ScriptService scriptService() {
             return scriptService;
-        }
-
-        public ClusterState clusterState() {
-            return clusterState;
         }
     }
 
@@ -125,7 +119,6 @@ public abstract class InternalAggregation implements Aggregation, ToXContent, Na
     }
 
     protected abstract void doWriteTo(StreamOutput out) throws IOException;
-
 
     @Override
     public String getName() {
@@ -197,6 +190,47 @@ public abstract class InternalAggregation implements Aggregation, ToXContent, Na
 
     public abstract XContentBuilder doXContentBody(XContentBuilder builder, Params params) throws IOException;
 
+    @Override
+    public int hashCode() {
+        return Objects.hash(name, metaData, pipelineAggregators, doHashCode());
+    }
+
+    /**
+     * Opportunity for subclasses to the {@link #hashCode()} for this
+     * class.
+     **/
+    protected int doHashCode() {
+        return System.identityHashCode(this);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (obj == null) {
+            return false;
+        }
+        if (obj.getClass() != getClass()) {
+            return false;
+        }
+        InternalAggregation other = (InternalAggregation) obj;
+        return Objects.equals(name, other.name) &&
+                Objects.equals(pipelineAggregators, other.pipelineAggregators) &&
+                Objects.equals(metaData, other.metaData) &&
+                doEquals(obj);
+    }
+
+    // norelease: make this abstract when all InternalAggregations implement this method
+    /**
+     * Opportunity for subclasses to add criteria to the {@link #equals(Object)}
+     * method for this class.
+     *
+     * This method can safely cast <code>obj</code> to the subclass since the
+     * {@link #equals(Object)} method checks that <code>obj</code> is the same
+     * class as <code>this</code>
+     */
+    protected boolean doEquals(Object obj) {
+        return this == obj;
+    }
+
     /**
      * Common xcontent fields that are shared among addAggregation
      */
@@ -215,5 +249,4 @@ public abstract class InternalAggregation implements Aggregation, ToXContent, Na
         public static final String TO = "to";
         public static final String TO_AS_STRING = "to_as_string";
     }
-
 }

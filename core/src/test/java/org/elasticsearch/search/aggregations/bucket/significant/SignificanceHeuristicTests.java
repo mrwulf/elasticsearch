@@ -19,9 +19,9 @@
 package org.elasticsearch.search.aggregations.bucket.significant;
 
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.ParseFieldMatcher;
+import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.io.stream.InputStreamStreamInput;
 import org.elasticsearch.common.io.stream.NamedWriteableAwareStreamInput;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
@@ -35,7 +35,6 @@ import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.json.JsonXContent;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.query.QueryParseContext;
-import org.elasticsearch.indices.query.IndicesQueriesRegistry;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.search.SearchShardTarget;
@@ -68,6 +67,7 @@ import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonList;
 import static org.elasticsearch.search.aggregations.AggregationBuilders.significantTerms;
 import static org.elasticsearch.test.VersionUtils.randomVersion;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -107,8 +107,8 @@ public class SignificanceHeuristicTests extends ESTestCase {
         // read
         ByteArrayInputStream inBuffer = new ByteArrayInputStream(outBuffer.toByteArray());
         StreamInput in = new InputStreamStreamInput(inBuffer);
-        NamedWriteableRegistry registry = new NamedWriteableRegistry();
-        new SearchModule(Settings.EMPTY, registry, false, emptyList()); // populates the registry through side effects
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, false, emptyList()); // populates the registry through side effects
+        NamedWriteableRegistry registry = new NamedWriteableRegistry(searchModule.getNamedWriteables());
         in = new NamedWriteableAwareStreamInput(in, registry);
         in.setVersion(version);
         InternalMappedSignificantTerms<?, ?> read = (InternalMappedSignificantTerms<?, ?>) in.readNamedWriteable(InternalAggregation.class);
@@ -217,7 +217,7 @@ public class SignificanceHeuristicTests extends ESTestCase {
     // 1. The output of the builders can actually be parsed
     // 2. The parser does not swallow parameters after a significance heuristic was defined
     public void testBuilderAndParser() throws Exception {
-        SearchModule searchModule = new SearchModule(Settings.EMPTY, new NamedWriteableRegistry(), false, emptyList());
+        SearchModule searchModule = new SearchModule(Settings.EMPTY, false, emptyList());
         ParseFieldRegistry<SignificanceHeuristicParser> heuristicParserMapper = searchModule.getSignificanceHeuristicParserRegistry();
         SearchContext searchContext = new SignificantTermsTestSearchContext();
 
@@ -266,16 +266,15 @@ public class SignificanceHeuristicTests extends ESTestCase {
     protected void checkParseException(ParseFieldRegistry<SignificanceHeuristicParser> significanceHeuristicParserRegistry,
             SearchContext searchContext, String faultyHeuristicDefinition, String expectedError) throws IOException {
 
-        IndicesQueriesRegistry registry = new IndicesQueriesRegistry();
         try {
-            XContentParser stParser = JsonXContent.jsonXContent.createParser(
+            XContentParser stParser = createParser(JsonXContent.jsonXContent, 
                     "{\"field\":\"text\", " + faultyHeuristicDefinition + ",\"min_doc_count\":200}");
-            QueryParseContext parseContext = new QueryParseContext(registry, stParser, ParseFieldMatcher.STRICT);
+            QueryParseContext parseContext = new QueryParseContext(stParser, ParseFieldMatcher.STRICT);
             stParser.nextToken();
-            new SignificantTermsParser(significanceHeuristicParserRegistry, registry).parse("testagg", parseContext);
+            SignificantTermsAggregationBuilder.getParser(significanceHeuristicParserRegistry).parse("testagg", parseContext);
             fail();
-        } catch (ElasticsearchParseException e) {
-            assertTrue(e.getMessage().contains(expectedError));
+        } catch (ParsingException e) {
+            assertThat(e.getCause().getMessage(), containsString(expectedError));
         }
     }
 
@@ -285,18 +284,18 @@ public class SignificanceHeuristicTests extends ESTestCase {
         stBuilder.significanceHeuristic(significanceHeuristic).field("text").minDocCount(200);
         XContentBuilder stXContentBuilder = XContentFactory.jsonBuilder();
         stBuilder.internalXContent(stXContentBuilder, null);
-        XContentParser stParser = JsonXContent.jsonXContent.createParser(stXContentBuilder.string());
+        XContentParser stParser = createParser(JsonXContent.jsonXContent, stXContentBuilder.string());
         return parseSignificanceHeuristic(significanceHeuristicParserRegistry, searchContext, stParser);
     }
 
     private SignificanceHeuristic parseSignificanceHeuristic(
             ParseFieldRegistry<SignificanceHeuristicParser> significanceHeuristicParserRegistry, SearchContext searchContext,
             XContentParser stParser) throws IOException {
-        IndicesQueriesRegistry registry = new IndicesQueriesRegistry();
-        QueryParseContext parseContext = new QueryParseContext(registry, stParser, ParseFieldMatcher.STRICT);
+        QueryParseContext parseContext = new QueryParseContext(stParser, ParseFieldMatcher.STRICT);
         stParser.nextToken();
-        SignificantTermsAggregationBuilder aggregatorFactory = (SignificantTermsAggregationBuilder) new SignificantTermsParser(
-                significanceHeuristicParserRegistry, registry).parse("testagg", parseContext);
+        SignificantTermsAggregationBuilder aggregatorFactory =
+                (SignificantTermsAggregationBuilder) SignificantTermsAggregationBuilder.getParser(
+                significanceHeuristicParserRegistry).parse("testagg", parseContext);
         stParser.nextToken();
         assertThat(aggregatorFactory.getBucketCountThresholds().getMinDocCount(), equalTo(200L));
         assertThat(stParser.currentToken(), equalTo(null));
@@ -306,7 +305,7 @@ public class SignificanceHeuristicTests extends ESTestCase {
 
     protected SignificanceHeuristic parseFromString(ParseFieldRegistry<SignificanceHeuristicParser> significanceHeuristicParserRegistry,
             SearchContext searchContext, String heuristicString) throws IOException {
-        XContentParser stParser = JsonXContent.jsonXContent.createParser(
+        XContentParser stParser = createParser(JsonXContent.jsonXContent, 
                 "{\"field\":\"text\", " + heuristicString + ", \"min_doc_count\":200}");
         return parseSignificanceHeuristic(significanceHeuristicParserRegistry, searchContext, stParser);
     }

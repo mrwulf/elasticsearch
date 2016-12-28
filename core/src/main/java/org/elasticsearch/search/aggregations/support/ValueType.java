@@ -25,15 +25,12 @@ import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.fielddata.IndexGeoPointFieldData;
 import org.elasticsearch.index.fielddata.IndexNumericFieldData;
-import org.elasticsearch.index.mapper.core.DateFieldMapper;
+import org.elasticsearch.index.mapper.DateFieldMapper;
 import org.elasticsearch.search.DocValueFormat;
 import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 
-/**
- *
- */
 public enum ValueType implements Writeable {
 
     STRING((byte) 1, "string", "string", ValuesSourceType.BYTES,
@@ -71,6 +68,7 @@ public enum ValueType implements Writeable {
         }
     },
     IP((byte) 6, "ip", "ip", ValuesSourceType.BYTES, IndexFieldData.class, DocValueFormat.IP),
+    // TODO: what is the difference between "number" and "numeric"?
     NUMERIC((byte) 7, "numeric", "numeric", ValuesSourceType.NUMERIC, IndexNumericFieldData.class, DocValueFormat.RAW) {
         @Override
         public boolean isNumeric() {
@@ -81,6 +79,12 @@ public enum ValueType implements Writeable {
         @Override
         public boolean isGeoPoint() {
             return true;
+        }
+    },
+    BOOLEAN((byte) 9, "boolean", "boolean", ValuesSourceType.NUMERIC, IndexNumericFieldData.class, DocValueFormat.BOOLEAN) {
+        @Override
+        public boolean isNumeric() {
+            return super.isNumeric();
         }
     };
 
@@ -153,7 +157,9 @@ public enum ValueType implements Writeable {
             case "byte":    return LONG;
             case "date":    return DATE;
             case "ip":      return IP;
+            case "boolean": return BOOLEAN;
             default:
+                // TODO: do not be lenient here
                 return null;
         }
     }

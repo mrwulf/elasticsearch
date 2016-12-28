@@ -39,7 +39,6 @@ import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.IndexNotFoundException;
-import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.query.RangeQueryBuilder;
 import org.elasticsearch.index.query.TermsQueryBuilder;
 import org.elasticsearch.test.ESIntegTestCase;
@@ -50,6 +49,7 @@ import java.util.HashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_WAIT_FOR_ACTIVE_SHARDS;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertBlocked;
@@ -276,15 +276,8 @@ public class CreateIndexIT extends ESIntegTestCase {
                 .startObject("text")
                     .field("type", "text")
                 .endObject().endObject().endObject());
-        try {
-            b.get();
-        } catch (MapperParsingException e) {
-            StringBuilder messages = new StringBuilder();
-            for (Exception rootCause: e.guessRootCauses()) {
-                messages.append(rootCause.getMessage());
-            }
-            assertThat(messages.toString(), containsString("mapper [text] is used by multiple types"));
-        }
+        IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> b.get());
+        assertThat(e.getMessage(), containsString("mapper [text] is used by multiple types"));
     }
 
     public void testRestartIndexCreationAfterFullClusterRestart() throws Exception {
@@ -387,16 +380,21 @@ public class CreateIndexIT extends ESIntegTestCase {
                 .put("index.blocks.write", true)).get();
         ensureGreen();
         // now merge source into a single shard index
+
+        final boolean createWithReplicas = randomBoolean();
         assertAcked(client().admin().indices().prepareShrinkIndex("source", "target")
-            .setSettings(Settings.builder().put("index.number_of_replicas", 0).build()).get());
+            .setSettings(Settings.builder().put("index.number_of_replicas", createWithReplicas ? 1 : 0).build()).get());
         ensureGreen();
         assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
-        // bump replicas
-        client().admin().indices().prepareUpdateSettings("target")
-            .setSettings(Settings.builder()
-                .put("index.number_of_replicas", 1)).get();
-        ensureGreen();
-        assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
+
+        if (createWithReplicas == false) {
+            // bump replicas
+            client().admin().indices().prepareUpdateSettings("target")
+                .setSettings(Settings.builder()
+                    .put("index.number_of_replicas", 1)).get();
+            ensureGreen();
+            assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
+        }
 
         for (int i = 20; i < 40; i++) {
             client().prepareIndex("target", randomFrom("t1", "t2", "t3")).setSource("{\"foo\" : \"bar\", \"i\" : " + i + "}").get();
@@ -474,5 +472,32 @@ public class CreateIndexIT extends ESIntegTestCase {
         assertTrue("expected shard size must be set but wasn't: " + expectedShardSize, expectedShardSize > 0);
         ensureGreen();
         assertHitCount(client().prepareSearch("target").setSize(100).setQuery(new TermsQueryBuilder("foo", "bar")).get(), 20);
+    }
+
+    /**
+     * This test ensures that index creation adheres to the {@link IndexMetaData#SETTING_WAIT_FOR_ACTIVE_SHARDS}.
+     */
+    public void testDefaultWaitForActiveShardsUsesIndexSetting() throws Exception {
+        final int numReplicas = internalCluster().numDataNodes();
+        Settings settings = Settings.builder()
+                                .put(SETTING_WAIT_FOR_ACTIVE_SHARDS.getKey(), Integer.toString(numReplicas))
+                                .put(IndexMetaData.INDEX_NUMBER_OF_SHARDS_SETTING.getKey(), 1)
+                                .put(IndexMetaData.INDEX_NUMBER_OF_REPLICAS_SETTING.getKey(), numReplicas)
+                                .build();
+        assertAcked(client().admin().indices().prepareCreate("test-idx-1").setSettings(settings).get());
+
+        // all should fail
+        settings = Settings.builder()
+                       .put(settings)
+                       .put(SETTING_WAIT_FOR_ACTIVE_SHARDS.getKey(), "all")
+                       .build();
+        assertFalse(client().admin().indices().prepareCreate("test-idx-2").setSettings(settings).setTimeout("100ms").get().isShardsAcked());
+
+        // the numeric equivalent of all should also fail
+        settings = Settings.builder()
+                       .put(settings)
+                       .put(SETTING_WAIT_FOR_ACTIVE_SHARDS.getKey(), Integer.toString(numReplicas + 1))
+                       .build();
+        assertFalse(client().admin().indices().prepareCreate("test-idx-3").setSettings(settings).setTimeout("100ms").get().isShardsAcked());
     }
 }

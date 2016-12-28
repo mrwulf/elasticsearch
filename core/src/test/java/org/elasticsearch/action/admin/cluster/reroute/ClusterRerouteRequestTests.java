@@ -39,13 +39,12 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.admin.cluster.reroute.RestClusterRerouteAction;
+import org.elasticsearch.rest.action.admin.cluster.RestClusterRerouteAction;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.rest.FakeRestRequest;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +58,8 @@ import static org.elasticsearch.common.unit.TimeValue.timeValueMillis;
  */
 public class ClusterRerouteRequestTests extends ESTestCase {
     private static final int ROUNDS = 30;
-    private final List<Supplier<AllocationCommand>> RANDOM_COMMAND_GENERATORS = unmodifiableList(Arrays.asList(
+    private final List<Supplier<AllocationCommand>> RANDOM_COMMAND_GENERATORS = unmodifiableList(
+            Arrays.<Supplier<AllocationCommand>> asList(
             () -> new AllocateReplicaAllocationCommand(randomAsciiOfLengthBetween(2, 10), between(0, 1000),
                     randomAsciiOfLengthBetween(2, 10)),
             () -> new AllocateEmptyPrimaryAllocationCommand(randomAsciiOfLengthBetween(2, 10), between(0, 1000),
@@ -74,8 +74,8 @@ public class ClusterRerouteRequestTests extends ESTestCase {
     private final AllocationCommandRegistry allocationCommandRegistry;
 
     public ClusterRerouteRequestTests() {
-        namedWriteableRegistry = new NamedWriteableRegistry();
-        allocationCommandRegistry = new NetworkModule(null, null, true, namedWriteableRegistry).getAllocationCommandRegistry();
+        allocationCommandRegistry = NetworkModule.getAllocationCommandRegistry();
+        namedWriteableRegistry = new NamedWriteableRegistry(NetworkModule.getNamedWriteables());
     }
 
     private ClusterRerouteRequest randomRequest() {
@@ -179,7 +179,7 @@ public class ClusterRerouteRequestTests extends ESTestCase {
         return RestClusterRerouteAction.createRequest(restRequest, allocationCommandRegistry, ParseFieldMatcher.STRICT);
     }
 
-    private static RestRequest toRestRequest(ClusterRerouteRequest original) throws IOException {
+    private RestRequest toRestRequest(ClusterRerouteRequest original) throws IOException {
         Map<String, String> params = new HashMap<>();
         XContentBuilder builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
         boolean hasBody = false;
@@ -209,7 +209,7 @@ public class ClusterRerouteRequestTests extends ESTestCase {
         }
         builder.endObject();
 
-        FakeRestRequest.Builder requestBuilder = new FakeRestRequest.Builder();
+        FakeRestRequest.Builder requestBuilder = new FakeRestRequest.Builder(xContentRegistry());
         requestBuilder.withParams(params);
         if (hasBody) {
             requestBuilder.withContent(builder.bytes());

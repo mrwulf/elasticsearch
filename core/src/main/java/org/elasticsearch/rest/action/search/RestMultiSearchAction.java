@@ -33,16 +33,12 @@ import org.elasticsearch.common.xcontent.XContent;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.query.QueryParseContext;
-import org.elasticsearch.indices.query.IndicesQueriesRegistry;
 import org.elasticsearch.rest.BaseRestHandler;
-import org.elasticsearch.rest.RestChannel;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
-import org.elasticsearch.rest.action.support.RestActions;
-import org.elasticsearch.rest.action.support.RestToXContentListener;
-import org.elasticsearch.search.aggregations.AggregatorParsers;
+import org.elasticsearch.rest.action.RestToXContentListener;
+import org.elasticsearch.search.SearchRequestParsers;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.suggest.Suggesters;
 
 import java.io.IOException;
 import java.util.Map;
@@ -54,21 +50,15 @@ import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeSt
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.rest.RestRequest.Method.POST;
 
-/**
- */
 public class RestMultiSearchAction extends BaseRestHandler {
 
     private final boolean allowExplicitIndex;
-    private final IndicesQueriesRegistry indicesQueriesRegistry;
-    private final AggregatorParsers aggParsers;
-    private final Suggesters suggesters;
+    private final SearchRequestParsers searchRequestParsers;
 
     @Inject
-    public RestMultiSearchAction(Settings settings, RestController controller, IndicesQueriesRegistry indicesQueriesRegistry,
-                                 AggregatorParsers aggParsers, Suggesters suggesters) {
+    public RestMultiSearchAction(Settings settings, RestController controller, SearchRequestParsers searchRequestParsers) {
         super(settings);
-        this.aggParsers = aggParsers;
-        this.suggesters = suggesters;
+        this.searchRequestParsers = searchRequestParsers;
 
         controller.registerHandler(GET, "/_msearch", this);
         controller.registerHandler(POST, "/_msearch", this);
@@ -78,32 +68,30 @@ public class RestMultiSearchAction extends BaseRestHandler {
         controller.registerHandler(POST, "/{index}/{type}/_msearch", this);
 
         this.allowExplicitIndex = MULTI_ALLOW_EXPLICIT_INDEX.get(settings);
-        this.indicesQueriesRegistry = indicesQueriesRegistry;
     }
 
     @Override
-    public void handleRequest(final RestRequest request, final RestChannel channel, final NodeClient client) throws Exception {
-        MultiSearchRequest multiSearchRequest = parseRequest(request, allowExplicitIndex, indicesQueriesRegistry, parseFieldMatcher,
-                aggParsers, suggesters);
-        client.multiSearch(multiSearchRequest, new RestToXContentListener<>(channel));
+    public RestChannelConsumer prepareRequest(final RestRequest request, final NodeClient client) throws IOException {
+        MultiSearchRequest multiSearchRequest = parseRequest(request, allowExplicitIndex, searchRequestParsers, parseFieldMatcher);
+        return channel -> client.multiSearch(multiSearchRequest, new RestToXContentListener<>(channel));
     }
 
     /**
      * Parses a {@link RestRequest} body and returns a {@link MultiSearchRequest}
      */
     public static MultiSearchRequest parseRequest(RestRequest restRequest, boolean allowExplicitIndex,
-                                                  IndicesQueriesRegistry queriesRegistry, ParseFieldMatcher parseFieldMatcher,
-                                                  AggregatorParsers aggParsers, Suggesters suggesters) throws IOException {
-
+                                                  SearchRequestParsers searchRequestParsers,
+                                                  ParseFieldMatcher parseFieldMatcher) throws IOException {
         MultiSearchRequest multiRequest = new MultiSearchRequest();
         if (restRequest.hasParam("max_concurrent_searches")) {
             multiRequest.maxConcurrentSearchRequests(restRequest.paramAsInt("max_concurrent_searches", 0));
         }
 
-        parseMultiLineRequest(restRequest, multiRequest.indicesOptions(), allowExplicitIndex, (searchRequest, bytes) -> {
-            try (XContentParser requestParser = XContentFactory.xContent(bytes).createParser(bytes)) {
-                final QueryParseContext queryParseContext = new QueryParseContext(queriesRegistry, requestParser, parseFieldMatcher);
-                searchRequest.source(SearchSourceBuilder.fromXContent(queryParseContext, aggParsers, suggesters));
+        parseMultiLineRequest(restRequest, multiRequest.indicesOptions(), allowExplicitIndex, (searchRequest, parser) -> {
+            try {
+                final QueryParseContext queryParseContext = new QueryParseContext(parser, parseFieldMatcher);
+                searchRequest.source(SearchSourceBuilder.fromXContent(queryParseContext,
+                    searchRequestParsers.aggParsers, searchRequestParsers.suggesters, searchRequestParsers.searchExtParsers));
                 multiRequest.add(searchRequest);
             } catch (IOException e) {
                 throw new ElasticsearchParseException("Exception when parsing search request", e);
@@ -117,14 +105,14 @@ public class RestMultiSearchAction extends BaseRestHandler {
      * Parses a multi-line {@link RestRequest} body, instanciating a {@link SearchRequest} for each line and applying the given consumer.
      */
     public static void parseMultiLineRequest(RestRequest request, IndicesOptions indicesOptions, boolean allowExplicitIndex,
-                                             BiConsumer<SearchRequest, BytesReference> consumer) throws IOException {
+            BiConsumer<SearchRequest, XContentParser> consumer) throws IOException {
 
         String[] indices = Strings.splitStringByCommaToArray(request.param("index"));
         String[] types = Strings.splitStringByCommaToArray(request.param("type"));
         String searchType = request.param("search_type");
         String routing = request.param("routing");
 
-        final BytesReference data = RestActions.getRestContent(request);
+        final BytesReference data = request.contentOrSourceParam();
 
         XContent xContent = XContentFactory.xContent(data);
         int from = 0;
@@ -163,7 +151,7 @@ public class RestMultiSearchAction extends BaseRestHandler {
 
             // now parse the action
             if (nextMarker - from > 0) {
-                try (XContentParser parser = xContent.createParser(data.slice(from, nextMarker - from))) {
+                try (XContentParser parser = xContent.createParser(request.getXContentRegistry(), data.slice(from, nextMarker - from))) {
                     Map<String, Object> source = parser.map();
                     for (Map.Entry<String, Object> entry : source.entrySet()) {
                         Object value = entry.getValue();
@@ -196,7 +184,10 @@ public class RestMultiSearchAction extends BaseRestHandler {
             if (nextMarker == -1) {
                 break;
             }
-            consumer.accept(searchRequest, data.slice(from, nextMarker - from));
+            BytesReference bytes = data.slice(from, nextMarker - from);
+            try (XContentParser parser = XContentFactory.xContent(bytes).createParser(request.getXContentRegistry(), bytes)) {
+                consumer.accept(searchRequest, parser);
+            }
             // move pointers
             from = nextMarker + 1;
         }
